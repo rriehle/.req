@@ -16,7 +16,7 @@ A general-purpose toolkit for managing software requirements across multiple pro
 
 1. Clone this repository to `~/.req`:
    ```bash
-   git clone <repo-url> ~/.req
+   git clone repo-url> ~/.req
    ```
 
 2. Add `~/.req/bin` to your PATH:
@@ -523,12 +523,13 @@ bb -e "(clojure.edn/read-string (slurp \".req.edn\"))"
 
 ## See Also
 
-- [ADR Tools](~/.adr/README.md)
-- [RunNotes](~/.runnote/README.md)
+- [ADR Tools](https://github.com/rriehle/.adr)
+- [RunNotes](https://github.com:rriehle/.runnote)
 - [ISO/IEC 25010 Software Quality Model](https://iso25000.com/index.php/en/iso-25000-standards/iso-25010)
 - [RFC 2119: Key words for use in RFCs](https://www.rfc-editor.org/rfc/rfc2119)
 - [ADR-00035: Folder and Script Naming Conventions](~/src/xional/docs/architecture/decisions/00035-folder-and-script-naming-conventions.md)
 
 ## License
 
-[To be determined]
+MIT
+
