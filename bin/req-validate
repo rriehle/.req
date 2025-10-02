@@ -1,0 +1,365 @@
+#!/usr/bin/env bb
+
+;; clj-kondo config:
+;; {:linters {:redefined-var {:exclude [user/-main]}
+;;            :duplicate-require {:level :off}}}
+
+(ns ^:clj-kondo/ignore req-validate
+  (:require [babashka.fs :as fs]
+            [clojure.string :as str]))
+
+;; Load shared libraries from ~/.lib/
+(load-file (str (fs/expand-home "~/.lib/req-core.bb")))
+(def load-config (:load-config req-core/exports))
+(def resolve-req-path (:resolve-req-path req-core/exports))
+(def req-config (:req-config req-core/exports))
+
+(load-file (str (fs/expand-home "~/.lib/req-metadata-extractor.bb")))
+(def parse-req-metadata (:parse-req-metadata req-metadata-extractor/exports))
+
+;; ============================================================================
+;; Configuration
+;; ============================================================================
+
+(defn get-req-config
+  "Load requirements configuration with defaults.
+   Returns map with :req-dir, :template-file, :excluded-files"
+  []
+  (let [config-result (load-config)
+        cfg (req-config config-result)
+        req-dir (resolve-req-path config-result)]
+    {:req-dir req-dir
+     :template-file (or (:template-file cfg) "REQ-00000-template.md")
+     :excluded-files (or (:excluded-files cfg) #{"README.md"})
+     :config-result config-result}))
+
+;; ============================================================================
+;; Validation result structure
+;; ============================================================================
+
+(defn validation-result [valid? file error]
+  {:valid valid?
+   :file file
+   :error error})
+
+;; ============================================================================
+;; File discovery
+;; ============================================================================
+
+(defn find-req-files [config]
+  (let [req-dir (:req-dir config)]
+    (when (fs/exists? req-dir)
+      (let [files (fs/glob req-dir "*.md")]
+        (filter #(and (not= (fs/file-name %) (:template-file config))
+                      (not ((:excluded-files config) (fs/file-name %)))) files)))))
+
+;; ============================================================================
+;; Extract requirement ID from filename
+;; ============================================================================
+
+(defn extract-req-id [file]
+  "Extract requirement ID from filename (REQ-[CATEGORY]-[NUMBER])"
+  (let [filename (fs/file-name file)
+        match (re-find #"^(REQ-[A-Z]+-\d{3,5})" filename)]
+    (when match
+      (second match))))
+
+;; ============================================================================
+;; Check for duplicate requirement IDs
+;; ============================================================================
+
+(defn validate-req-ids [files]
+  (let [req-ids (keep extract-req-id files)
+        grouped (group-by identity req-ids)
+        duplicates (filter #(> (count (second %)) 1) grouped)]
+    (if (empty? duplicates)
+      {:valid true}
+      {:valid false
+       :duplicates (into {} duplicates)})))
+
+;; ============================================================================
+;; Validate metadata
+;; ============================================================================
+
+(defn validate-metadata [file content]
+  (let [result (parse-req-metadata content)]
+    (if (:valid result)
+      (validation-result true file nil)
+      (validation-result false file
+                         (str "Invalid metadata: "
+                              (or (-> result :errors first :message)
+                                  "metadata validation failed"))))))
+
+;; ============================================================================
+;; Validate metadata matches filename
+;; ============================================================================
+
+(defn validate-metadata-filename-match [file content]
+  (let [filename-id (extract-req-id file)
+        result (parse-req-metadata content)
+        metadata-id (get-in result [:data :req-id])]
+    (if (or (not filename-id) (not metadata-id))
+      (validation-result true file nil) ; Will be caught by other validations
+      (if (= filename-id metadata-id)
+        (validation-result true file nil)
+        (validation-result false file
+                           (str "Filename ID (" filename-id ") doesn't match metadata ID ("
+                                metadata-id ")"))))))
+
+;; ============================================================================
+;; Validate required sections
+;; ============================================================================
+
+(defn validate-sections [file content]
+  (let [required-sections ["## Requirement Statement"
+                           "## Context"
+                           "## Acceptance Criteria"]
+        missing-required (filter #(not (str/includes? content %)) required-sections)]
+    (if (empty? missing-required)
+      (validation-result true file nil)
+      (validation-result false file
+                         (str "Missing required sections: "
+                              (str/join ", " missing-required))))))
+
+;; ============================================================================
+;; Validate traceability links exist (if configured)
+;; ============================================================================
+
+(defn validate-traceability [file content config]
+  (let [cfg (:config-result config)
+        req-cfg (req-config cfg)
+        require-adr-refs? (get-in req-cfg [:adr-integration :require-adr-refs] false)
+        result (parse-req-metadata content)
+        metadata (:data result)]
+    (cond
+      (not (:valid result))
+      (validation-result true file nil) ; Skip if metadata invalid, caught elsewhere
+
+      (and require-adr-refs? (empty? (get-in metadata [:trace :adr])))
+      (validation-result false file "ADR references required but missing")
+
+      :else
+      (validation-result true file nil))))
+
+;; ============================================================================
+;; Validate a single requirement file
+;; ============================================================================
+
+(defn validate-req-file [file config]
+  (let [content (slurp (str file))
+        metadata-validation (validate-metadata file content)
+        filename-match-validation (validate-metadata-filename-match file content)
+        section-validation (validate-sections file content)
+        traceability-validation (validate-traceability file content config)]
+    {:file file
+     :metadata-validation metadata-validation
+     :filename-match-validation filename-match-validation
+     :section-validation section-validation
+     :traceability-validation traceability-validation}))
+
+;; ============================================================================
+;; Analyze validation results
+;; ============================================================================
+
+(defn analyze-validation-results [id-validation file-validations]
+  (let [has-duplicate-ids? (not (:valid id-validation))
+        file-errors (filter #(or (not (get-in % [:metadata-validation :valid]))
+                                 (not (get-in % [:filename-match-validation :valid]))
+                                 (not (get-in % [:section-validation :valid]))
+                                 (not (get-in % [:traceability-validation :valid])))
+                            file-validations)
+        total-errors (+ (if has-duplicate-ids? 1 0) (count file-errors))]
+    {:has-duplicate-ids? has-duplicate-ids?
+     :file-errors file-errors
+     :total-errors total-errors
+     :id-validation id-validation
+     :file-validations file-validations}))
+
+;; ============================================================================
+;; Display results
+;; ============================================================================
+
+(defn display-results [analysis ci-mode?]
+  (when-not ci-mode?
+    (println "\n📋 Requirements Validation Report")
+    (println "=================================\n"))
+
+  (let [{:keys [has-duplicate-ids? file-errors total-errors
+                id-validation file-validations]} analysis]
+
+    ;; Requirement ID validation
+    (if (:valid id-validation)
+      (when-not ci-mode? (println "✅ No duplicate requirement IDs found"))
+      (when-not ci-mode?
+        (println "❌ Duplicate requirement IDs detected:")
+        (doseq [[req-id files] (:duplicates id-validation)]
+          (println (str "  - " req-id " appears " (count files) " times")))))
+
+    ;; File validations
+    (when (and (seq file-errors) (not ci-mode?))
+      (println "\n❌ Errors found:")
+      (doseq [error file-errors]
+        (let [file (:file error)]
+          (when-not (get-in error [:metadata-validation :valid])
+            (println (str "  - " (fs/file-name file) ": "
+                          (get-in error [:metadata-validation :error]))))
+          (when-not (get-in error [:filename-match-validation :valid])
+            (println (str "  - " (fs/file-name file) ": "
+                          (get-in error [:filename-match-validation :error]))))
+          (when-not (get-in error [:section-validation :valid])
+            (println (str "  - " (fs/file-name file) ": "
+                          (get-in error [:section-validation :error]))))
+          (when-not (get-in error [:traceability-validation :valid])
+            (println (str "  - " (fs/file-name file) ": "
+                          (get-in error [:traceability-validation :error])))))))
+
+    ;; Summary
+    (when-not ci-mode?
+      (println (str "\n📊 Summary: "
+                    (count file-validations) " requirements checked, "
+                    total-errors " errors")))
+
+    nil))
+
+;; ============================================================================
+;; Check for new requirement ID collisions (for pre-commit hook)
+;; ============================================================================
+
+(defn check-new-req-collisions [config]
+  (let [;; Get staged requirement files from git
+        staged-output (-> (clojure.java.shell/sh "git" "diff" "--cached" "--name-only" "--diff-filter=A")
+                         :out
+                         str/trim)
+        staged-files (when-not (str/blank? staged-output)
+                      (str/split-lines staged-output))
+        req-dir (:req-dir config)
+        ;; Filter for requirement files
+        staged-reqs (filter #(and (str/starts-with? % (str req-dir "/"))
+                                 (str/ends-with? % ".md")
+                                 (not= (fs/file-name %) (:template-file config))
+                                 (not ((:excluded-files config) (fs/file-name %))))
+                           staged-files)
+        ;; Extract requirement IDs from staged files
+        staged-ids (keep #(extract-req-id (fs/file-name %)) staged-reqs)
+        ;; Get all existing requirement files, excluding staged files
+        all-files (find-req-files config)
+        staged-basenames (set (map fs/file-name staged-reqs))
+        existing-files (remove #(staged-basenames (fs/file-name %)) all-files)
+        existing-ids (set (keep extract-req-id existing-files))
+        ;; Find collisions
+        collisions (filter existing-ids staged-ids)]
+    (if (empty? collisions)
+      {:valid true
+       :staged-reqs staged-reqs}
+      {:valid false
+       :collisions collisions
+       :staged-reqs staged-reqs})))
+
+;; ============================================================================
+;; Check for PR requirement ID collisions (for GitHub Actions)
+;; ============================================================================
+
+(defn check-pr-req-collisions [base-ref config]
+  (let [req-dir (:req-dir config)
+        ;; Get new requirement files in PR
+        new-files-output (-> (clojure.java.shell/sh "git" "diff" "--name-only" "--diff-filter=A"
+                                                    (str base-ref "...HEAD"))
+                            :out
+                            str/trim)
+        new-files (when-not (str/blank? new-files-output)
+                   (str/split-lines new-files-output))
+        ;; Filter for requirement files
+        new-reqs (filter #(and (str/starts-with? % (str req-dir "/"))
+                              (str/ends-with? % ".md")
+                              (not= (fs/file-name %) (:template-file config))
+                              (not ((:excluded-files config) (fs/file-name %))))
+                        new-files)
+        ;; Extract requirement IDs
+        new-ids (keep #(extract-req-id (fs/file-name %)) new-reqs)
+        ;; Get existing IDs from base branch
+        existing-output (-> (clojure.java.shell/sh "git" "ls-tree" "-r" base-ref "--name-only"
+                                                   req-dir)
+                           :out
+                           str/trim)
+        existing-files (when-not (str/blank? existing-output)
+                        (str/split-lines existing-output))
+        existing-ids (set (keep #(extract-req-id (fs/file-name %)) existing-files))
+        ;; Find collisions
+        collisions (filter existing-ids new-ids)]
+    (if (empty? collisions)
+      {:valid true
+       :new-reqs new-reqs
+       :message (if (empty? new-reqs)
+                 "No new requirements in this PR"
+                 (str (count new-reqs) " new requirement(s) checked, no collisions"))}
+      {:valid false
+       :collisions collisions
+       :new-reqs new-reqs
+       :message (str "Collision detected! IDs already in use: "
+                    (str/join ", " collisions))})))
+
+;; ============================================================================
+;; Print usage
+;; ============================================================================
+
+(defn print-usage []
+  (println "Usage: req-validate [options]")
+  (println "")
+  (println "Options:")
+  (println "  --ci         Run in CI mode (minimal output, exit code only)")
+  (println "  --check-new  Check for collisions in newly added requirements (pre-commit hook)")
+  (println "  --check-pr <base-ref>  Check for collisions in PR (GitHub Actions)")
+  (println "  --help       Show this help message"))
+
+;; ============================================================================
+;; Main function
+;; ============================================================================
+
+(defn -main [& args]
+  (let [config (get-req-config)]
+    (cond
+      (some #{"--help" "-h"} args)
+      (print-usage)
+
+      (some #{"--check-pr"} args)
+      (let [base-ref (or (second (drop-while #(not= "--check-pr" %) args))
+                        "origin/main")
+            result (check-pr-req-collisions base-ref config)]
+        (println (:message result))
+        (when-not (:valid result)
+          (println "\nPlease use a different requirement ID.")
+          (println (str "Run 'ls " (:req-dir config) "/' to see existing requirements.")))
+        (System/exit (if (:valid result) 0 1)))
+
+      (some #{"--check-new"} args)
+      (let [result (check-new-req-collisions config)]
+        (if (:valid result)
+          (do
+            (when (seq (:staged-reqs result))
+              (println "✅ No requirement ID collisions detected in staged files"))
+            (System/exit 0))
+          (do
+            (println "❌ Requirement ID collision detected!")
+            (println "The following IDs already exist:")
+            (doseq [req-id (:collisions result)]
+              (println (str "  - " req-id)))
+            (println "\nPlease use a different requirement ID.")
+            (println (str "Run 'ls " (:req-dir config) "/' to see existing requirements."))
+            (System/exit 1))))
+
+      :else
+      (let [ci-mode? (some #{"--ci"} args)
+            files (find-req-files config)
+            id-validation (validate-req-ids files)
+            file-validations (map #(validate-req-file % config) files)
+            analysis (analyze-validation-results id-validation file-validations)
+            _ (display-results analysis ci-mode?)
+            exit-code (if (zero? (:total-errors analysis)) 0 1)]
+        (System/exit exit-code)))))
+
+;; ============================================================================
+;; CLI entry point
+;; ============================================================================
+
+(when (= *file* (System/getProperty "babashka.file"))
+  (apply -main *command-line-args*))

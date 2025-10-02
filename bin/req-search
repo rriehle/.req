@@ -1,0 +1,320 @@
+#!/usr/bin/env bb
+
+(ns ^:clj-kondo/ignore req-search
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [babashka.fs :as fs]))
+
+;; Load shared libraries from ~/.lib/
+(load-file (str (fs/expand-home "~/.lib/req-metadata-extractor.bb")))
+(def extract-req-metadata (:extract-req-metadata req-metadata-extractor/exports))
+(def summarize-requirement (:summarize-requirement req-metadata-extractor/exports))
+
+(load-file (str (fs/expand-home "~/.lib/req-core.bb")))
+(def load-config (:load-config req-core/exports))
+(def resolve-req-path (:resolve-req-path req-core/exports))
+
+;; ============================================================================
+;; Configuration
+;; ============================================================================
+
+(defn get-req-dir
+  "Get requirements directory from config"
+  []
+  (let [config-result (load-config)]
+    (resolve-req-path config-result)))
+
+;; ============================================================================
+;; Requirement Reading and Metadata Extraction
+;; ============================================================================
+
+(defn read-req-metadata [file]
+  (try
+    (let [content (slurp file)
+          lines (str/split-lines content)
+          title-line (first (filter #(str/starts-with? % "#") lines))
+          title (when title-line (str/trim (subs title-line 1)))
+          metadata (extract-req-metadata content)]
+      (when metadata
+        {:file (.getName file)
+         :path (.getPath file)
+         :title title
+         :req-id (:req-id metadata)
+         :type (:type metadata)
+         :category (:category metadata)
+         :priority (:priority metadata)
+         :status (:status metadata)
+         :tags (set (:tag metadata))
+         :trace (:trace metadata)
+         :nfr-taxonomy (:nfr-taxonomy metadata)
+         :content content
+         :metadata metadata}))
+    (catch Exception e
+      (println "Error reading" (.getName file) ":" (.getMessage e))
+      nil)))
+
+;; ============================================================================
+;; List Requirements
+;; ============================================================================
+
+(defn list-reqs []
+  (let [req-dir (get-req-dir)
+        dir (io/file req-dir)]
+    (when (.exists dir)
+      (->> (.listFiles dir)
+           (filter #(and (.isFile %)
+                         (str/ends-with? (.getName %) ".md")
+                         (re-matches #"REQ-[A-Z]+-\d{3,5}.*\.md" (.getName %))))
+           (map read-req-metadata)
+           (filter some?)
+           (sort-by :req-id)))))
+
+;; ============================================================================
+;; Search Functions
+;; ============================================================================
+
+(defn search-by-tag [tag reqs]
+  (let [tag-kw (if (keyword? tag) tag (keyword tag))]
+    (filter #(contains? (:tags %) tag-kw) reqs)))
+
+(defn search-by-content [query reqs]
+  (filter #(str/includes? (str/lower-case (:content %))
+                          (str/lower-case query))
+          reqs))
+
+(defn search-by-status [status reqs]
+  (filter #(when-let [s (:status %)]
+             (= (str/lower-case (name s))
+                (str/lower-case status)))
+          reqs))
+
+(defn search-by-category [category reqs]
+  (let [cat-kw (if (keyword? category) category (keyword category))]
+    (filter #(= (:category %) cat-kw) reqs)))
+
+(defn search-by-priority [priority reqs]
+  (let [pri-kw (if (keyword? priority) priority (keyword priority))]
+    (filter #(= (:priority %) pri-kw) reqs)))
+
+(defn search-by-type [type reqs]
+  (let [type-kw (if (keyword? type) type (keyword type))]
+    (filter #(= (:type %) type-kw) reqs)))
+
+(defn search-by-adr [adr-id reqs]
+  "Search requirements that reference a specific ADR"
+  (filter #(when-let [adr-refs (get-in % [:trace :adr])]
+             (contains? adr-refs adr-id))
+          reqs))
+
+(defn search-by-runnote [runnote-name reqs]
+  "Search requirements that reference a specific RunNotes file"
+  (filter #(when-let [runnote-refs (get-in % [:trace :runnote])]
+             (some (fn [ref] (str/includes? ref runnote-name)) runnote-refs))
+          reqs))
+
+;; ============================================================================
+;; Display Functions
+;; ============================================================================
+
+(defn print-req [req]
+  (println (str "\n" (:req-id req) " - " (:title req)))
+  (println (str "  File: " (:file req)))
+  (println (str "  Type: " (name (:type req))))
+  (println (str "  Category: " (name (:category req))))
+  (println (str "  Priority: " (name (:priority req))))
+  (println (str "  Status: " (name (:status req))))
+  (when (seq (:tags req))
+    (println (str "  Tags: " (str/join " " (map #(str ":" (name %)) (:tags req))))))
+  (when-let [trace (:trace req)]
+    (when (seq (:adr trace))
+      (println (str "  ADRs: " (str/join ", " (:adr trace)))))
+    (when (seq (:code trace))
+      (println (str "  Code: " (str/join ", " (:code trace)))))
+    (when (seq (:tests trace))
+      (println (str "  Tests: " (str/join ", " (:tests trace)))))))
+
+(defn list-all-tags
+  "List all unique tags used across requirements"
+  []
+  (let [reqs (list-reqs)
+        all-tags (mapcat :tags reqs)]
+    (sort (distinct all-tags))))
+
+(defn list-all-categories
+  "List all unique categories used across requirements"
+  []
+  (let [reqs (list-reqs)]
+    (sort (distinct (map :category reqs)))))
+
+(defn print-tag-summary
+  "Print a summary of tag usage across requirements"
+  []
+  (let [reqs (list-reqs)
+        all-tags (mapcat :tags reqs)
+        tag-freq (frequencies all-tags)
+        sorted-tags (sort-by val > tag-freq)]
+    (println "\nTag Usage Summary:")
+    (println "==================")
+    (doseq [[tag count] sorted-tags]
+      (println (format "  %-30s %d requirement%s"
+                       (str ":" (name tag))
+                       count
+                       (if (= count 1) "" "s"))))))
+
+(defn print-summary
+  "Print summary statistics about requirements"
+  []
+  (let [reqs (list-reqs)
+        total (count reqs)
+        by-type (group-by :type reqs)
+        by-priority (group-by :priority reqs)
+        by-status (group-by :status reqs)
+        by-category (group-by :category reqs)]
+    (println "\n📊 Requirements Summary")
+    (println "======================")
+    (println (str "\nTotal Requirements: " total))
+
+    (println "\nBy Type:")
+    (doseq [[type group] (sort-by key by-type)]
+      (println (format "  %-20s %d" (name type) (count group))))
+
+    (println "\nBy Priority:")
+    (doseq [[pri group] (sort-by key by-priority)]
+      (println (format "  %-20s %d" (name pri) (count group))))
+
+    (println "\nBy Status:")
+    (doseq [[status group] (sort-by key by-status)]
+      (println (format "  %-20s %d" (name status) (count group))))
+
+    (println "\nBy Category:")
+    (doseq [[cat group] (sort-by key by-category)]
+      (println (format "  %-20s %d" (name cat) (count group))))))
+
+;; ============================================================================
+;; Usage
+;; ============================================================================
+
+(defn print-usage []
+  (println "Usage: req-search [command] [args]")
+  (println "")
+  (println "Commands:")
+  (println "  list                       - List all requirements")
+  (println "  tag <keyword>             - Search by tag (e.g., :authentication)")
+  (println "  content <query>           - Search by content")
+  (println "  status <status>           - Search by status (e.g., accepted)")
+  (println "  category <category>       - Search by category (e.g., :security)")
+  (println "  priority <priority>       - Search by priority (e.g., :must)")
+  (println "  type <type>               - Search by type (functional or non-functional)")
+  (println "  adr <adr-id>              - Find requirements linked to an ADR")
+  (println "  runnote <name>            - Find requirements linked to a RunNotes file")
+  (println "  list-tags                 - List all unique tags")
+  (println "  list-categories           - List all unique categories")
+  (println "  tag-summary               - Show tag usage statistics")
+  (println "  summary                   - Show requirements summary statistics")
+  (println "  help                      - Show this help"))
+
+;; ============================================================================
+;; Main
+;; ============================================================================
+
+(defn -main [& args]
+  (let [command (first args)
+        reqs (list-reqs)]
+    (case command
+      "list" (doseq [req reqs]
+               (print-req req))
+
+      "tag" (if-let [tag (second args)]
+              (let [results (search-by-tag tag reqs)]
+                (if (seq results)
+                  (doseq [req results]
+                    (print-req req))
+                  (println "No requirements found with tag:" tag)))
+              (println "Please specify a tag"))
+
+      "content" (if-let [query (second args)]
+                  (let [results (search-by-content query reqs)]
+                    (if (seq results)
+                      (doseq [req results]
+                        (print-req req))
+                      (println "No requirements found containing:" query)))
+                  (println "Please specify a search query"))
+
+      "status" (if-let [status (second args)]
+                 (let [results (search-by-status status reqs)]
+                   (if (seq results)
+                     (doseq [req results]
+                       (print-req req))
+                     (println "No requirements found with status:" status)))
+                 (println "Please specify a status"))
+
+      "category" (if-let [category (second args)]
+                   (let [results (search-by-category category reqs)]
+                     (if (seq results)
+                       (doseq [req results]
+                         (print-req req))
+                       (println "No requirements found with category:" category)))
+                   (println "Please specify a category"))
+
+      "priority" (if-let [priority (second args)]
+                   (let [results (search-by-priority priority reqs)]
+                     (if (seq results)
+                       (doseq [req results]
+                         (print-req req))
+                       (println "No requirements found with priority:" priority)))
+                   (println "Please specify a priority"))
+
+      "type" (if-let [type (second args)]
+               (let [results (search-by-type type reqs)]
+                 (if (seq results)
+                   (doseq [req results]
+                     (print-req req))
+                   (println "No requirements found with type:" type)))
+               (println "Please specify a type (functional or non-functional)"))
+
+      "adr" (if-let [adr-id (second args)]
+              (let [results (search-by-adr adr-id reqs)]
+                (if (seq results)
+                  (doseq [req results]
+                    (print-req req))
+                  (println "No requirements found linked to ADR:" adr-id)))
+              (println "Please specify an ADR ID"))
+
+      "runnote" (if-let [runnote (second args)]
+                  (let [results (search-by-runnote runnote reqs)]
+                    (if (seq results)
+                      (doseq [req results]
+                        (print-req req))
+                      (println "No requirements found linked to RunNotes:" runnote)))
+                  (println "Please specify a RunNotes filename"))
+
+      "list-tags" (let [tags (list-all-tags)]
+                    (if (seq tags)
+                      (do (println "\nAll tags used in requirements:")
+                          (doseq [tag tags]
+                            (println (str "  :" (name tag)))))
+                      (println "No tags found in requirements")))
+
+      "list-categories" (let [categories (list-all-categories)]
+                          (if (seq categories)
+                            (do (println "\nAll categories used in requirements:")
+                                (doseq [cat categories]
+                                  (println (str "  :" (name cat)))))
+                            (println "No categories found in requirements")))
+
+      "tag-summary" (print-tag-summary)
+
+      "summary" (print-summary)
+
+      "help" (print-usage)
+
+      (do
+        (println "Unknown command:" command)
+        (print-usage)))))
+
+;; ============================================================================
+;; CLI entry point
+;; ============================================================================
+
+(when (= *file* (System/getProperty "babashka.file"))
+  (apply -main *command-line-args*))

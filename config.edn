@@ -1,0 +1,55 @@
+{:req
+ {:path "doc/req"                           ; Default requirements location
+  :template-dir "~/.req/template"           ; Template location
+  :template-file "REQ-00000-template.md"    ; Template filename
+  :excluded-files #{"README.md"}            ; Files to skip in validation
+
+  ;; Metadata schema
+  :metadata-schema
+  {:required #{:req-id :type :category :priority :status :tag}
+   :optional #{:updated :trace :nfr-taxonomy :acceptance-criteria}}
+
+  ;; Integration settings
+  :adr-integration
+  {:enabled true
+   :adr-dir "doc/adr"                       ; Where to search for ADRs
+   :require-adr-refs false}                 ; ADR refs optional by default
+
+  :runnote-integration
+  {:enabled true
+   :runnote-dir "runnote"}                  ; Where to search for RunNotes
+
+  ;; Priority levels (RFC 2119 semantics)
+  :priority-levels #{:must :shall :should :may}
+
+  ;; Requirement types
+  :req-types #{:functional :non-functional :constraint}
+
+  ;; Requirement statuses
+  :req-statuses #{:proposed :accepted :deprecated :deferred :implemented}
+
+  ;; ISO 25010 quality characteristics
+  :iso-25010-taxonomy
+  {:functional-suitability #{:completeness :correctness :appropriateness}
+   :performance-efficiency #{:time-behavior :resource-utilization :capacity}
+   :compatibility #{:co-existence :interoperability}
+   :usability #{:learnability :operability :user-error-protection
+                :accessibility :ui-aesthetics}
+   :reliability #{:maturity :availability :fault-tolerance :recoverability}
+   :security #{:confidentiality :integrity :non-repudiation
+               :accountability :authenticity}
+   :maintainability #{:modularity :reusability :analyzability
+                      :modifiability :testability}
+   :portability #{:adaptability :installability :replaceability}}
+
+  ;; FURPS+ categories (complementary to ISO 25010)
+  :furps-taxonomy
+  {:functionality #{}
+   :usability #{}
+   :reliability #{}
+   :performance #{}
+   :supportability #{}
+   :design-constraints #{}
+   :implementation-constraints #{}
+   :interface-requirements #{}
+   :physical-constraints #{}}}}

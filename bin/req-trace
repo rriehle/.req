@@ -1,0 +1,308 @@
+#!/usr/bin/env bb
+
+(ns ^:clj-kondo/ignore req-trace
+  (:require [clojure.java.io :as io]
+            [clojure.string :as str]
+            [babashka.fs :as fs]))
+
+;; Load shared libraries from ~/.lib/
+(load-file (str (fs/expand-home "~/.lib/req-metadata-extractor.bb")))
+(def extract-req-metadata (:extract-req-metadata req-metadata-extractor/exports))
+(def traceability-coverage (:traceability-coverage req-metadata-extractor/exports))
+(def has-adr-trace? (:has-adr-trace? req-metadata-extractor/exports))
+(def has-code-trace? (:has-code-trace? req-metadata-extractor/exports))
+(def has-test-trace? (:has-test-trace? req-metadata-extractor/exports))
+(def has-runnote-trace? (:has-runnote-trace? req-metadata-extractor/exports))
+
+(load-file (str (fs/expand-home "~/.lib/req-core.bb")))
+(def load-config (:load-config req-core/exports))
+(def resolve-req-path (:resolve-req-path req-core/exports))
+
+;; ============================================================================
+;; Configuration
+;; ============================================================================
+
+(defn get-req-dir
+  "Get requirements directory from config"
+  []
+  (let [config-result (load-config)]
+    (resolve-req-path config-result)))
+
+;; ============================================================================
+;; Requirement Reading
+;; ============================================================================
+
+(defn read-req-metadata [file]
+  (try
+    (let [content (slurp file)
+          lines (str/split-lines content)
+          title-line (first (filter #(str/starts-with? % "#") lines))
+          title (when title-line (str/trim (subs title-line 1)))
+          metadata (extract-req-metadata content)]
+      (when metadata
+        {:file (.getName file)
+         :path (.getPath file)
+         :title title
+         :req-id (:req-id metadata)
+         :type (:type metadata)
+         :priority (:priority metadata)
+         :status (:status metadata)
+         :metadata metadata}))
+    (catch Exception e
+      (println "Error reading" (.getName file) ":" (.getMessage e))
+      nil)))
+
+(defn list-reqs []
+  (let [req-dir (get-req-dir)
+        dir (io/file req-dir)]
+    (when (.exists dir)
+      (->> (.listFiles dir)
+           (filter #(and (.isFile %)
+                         (str/ends-with? (.getName %) ".md")
+                         (re-matches #"REQ-[A-Z]+-\d{3,5}.*\.md" (.getName %))))
+           (map read-req-metadata)
+           (filter some?)
+           (sort-by :req-id)))))
+
+;; ============================================================================
+;; Traceability Analysis
+;; ============================================================================
+
+(defn analyze-traceability [reqs]
+  "Analyze traceability coverage across all requirements"
+  (let [total (count reqs)
+        with-adr (count (filter #(has-adr-trace? (:metadata %)) reqs))
+        with-code (count (filter #(has-code-trace? (:metadata %)) reqs))
+        with-tests (count (filter #(has-test-trace? (:metadata %)) reqs))
+        with-runnote (count (filter #(has-runnote-trace? (:metadata %)) reqs))
+        without-adr (filter #(not (has-adr-trace? (:metadata %))) reqs)
+        without-code (filter #(not (has-code-trace? (:metadata %))) reqs)
+        without-tests (filter #(not (has-test-trace? (:metadata %))) reqs)
+        without-runnote (filter #(not (has-runnote-trace? (:metadata %))) reqs)]
+    {:total total
+     :with-adr with-adr
+     :with-code with-code
+     :with-tests with-tests
+     :with-runnote with-runnote
+     :without-adr without-adr
+     :without-code without-code
+     :without-tests without-tests
+     :without-runnote without-runnote
+     :adr-percentage (if (pos? total) (int (* 100 (/ with-adr total))) 0)
+     :code-percentage (if (pos? total) (int (* 100 (/ with-code total))) 0)
+     :test-percentage (if (pos? total) (int (* 100 (/ with-tests total))) 0)
+     :runnote-percentage (if (pos? total) (int (* 100 (/ with-runnote total))) 0)}))
+
+(defn find-gaps [gap-type reqs]
+  "Find requirements missing specific traceability links"
+  (let [filter-fn (case gap-type
+                    :adr #(not (has-adr-trace? (:metadata %)))
+                    :code #(not (has-code-trace? (:metadata %)))
+                    :tests #(not (has-test-trace? (:metadata %)))
+                    :runnote #(not (has-runnote-trace? (:metadata %)))
+                    (constantly false))]
+    (filter filter-fn reqs)))
+
+(defn generate-traceability-matrix [reqs]
+  "Generate a traceability matrix showing all links"
+  (map (fn [req]
+         (let [metadata (:metadata req)
+               trace (:trace metadata)]
+           {:req-id (:req-id req)
+            :title (:title req)
+            :priority (:priority req)
+            :status (:status req)
+            :adr (or (seq (:adr trace)) [])
+            :runnote (or (seq (:runnote trace)) [])
+            :code (or (seq (:code trace)) [])
+            :tests (or (seq (:tests trace)) [])}))
+       reqs))
+
+;; ============================================================================
+;; Display Functions
+;; ============================================================================
+
+(defn print-traceability-summary [analysis]
+  (println "\n📊 Traceability Coverage Summary")
+  (println "=================================")
+  (println (str "\nTotal Requirements: " (:total analysis)))
+  (println (str "\nADR Traceability:"))
+  (println (format "  %-20s %d/%d (%d%%)"
+                   "With ADR links:"
+                   (:with-adr analysis)
+                   (:total analysis)
+                   (:adr-percentage analysis)))
+  (println (format "  %-20s %d"
+                   "Missing ADR links:"
+                   (count (:without-adr analysis))))
+
+  (println (str "\nCode Traceability:"))
+  (println (format "  %-20s %d/%d (%d%%)"
+                   "With code links:"
+                   (:with-code analysis)
+                   (:total analysis)
+                   (:code-percentage analysis)))
+  (println (format "  %-20s %d"
+                   "Missing code links:"
+                   (count (:without-code analysis))))
+
+  (println (str "\nTest Traceability:"))
+  (println (format "  %-20s %d/%d (%d%%)"
+                   "With test links:"
+                   (:with-tests analysis)
+                   (:total analysis)
+                   (:test-percentage analysis)))
+  (println (format "  %-20s %d"
+                   "Missing test links:"
+                   (count (:without-tests analysis))))
+
+  (println (str "\nRunNotes Traceability:"))
+  (println (format "  %-20s %d/%d (%d%%)"
+                   "With RunNotes links:"
+                   (:with-runnote analysis)
+                   (:total analysis)
+                   (:runnote-percentage analysis)))
+  (println (format "  %-20s %d"
+                   "Missing RunNotes:"
+                   (count (:without-runnote analysis)))))
+
+(defn print-gap-list [gap-type reqs]
+  (let [gap-name (case gap-type
+                   :adr "ADR"
+                   :code "Code"
+                   :tests "Tests"
+                   :runnote "RunNotes"
+                   "Unknown")
+        gaps (find-gaps gap-type reqs)]
+    (if (empty? gaps)
+      (println (str "\n✅ All requirements have " gap-name " traceability"))
+      (do
+        (println (str "\n⚠️  Requirements missing " gap-name " traceability (" (count gaps) "):"))
+        (println "===============================================")
+        (doseq [req gaps]
+          (println (format "  %-20s [%s] %s"
+                           (:req-id req)
+                           (name (:priority req))
+                           (:title req))))))))
+
+(defn print-traceability-matrix [matrix]
+  (println "\n📋 Traceability Matrix")
+  (println "======================\n")
+  (println (format "%-20s %-8s %-8s %-6s %-6s %-6s %-6s"
+                   "Requirement ID"
+                   "Priority"
+                   "Status"
+                   "ADR"
+                   "RunN"
+                   "Code"
+                   "Tests"))
+  (println (str (apply str (repeat 70 "-"))))
+  (doseq [row matrix]
+    (println (format "%-20s %-8s %-8s %-6s %-6s %-6s %-6s"
+                     (:req-id row)
+                     (name (:priority row))
+                     (name (:status row))
+                     (if (seq (:adr row)) "✓" "✗")
+                     (if (seq (:runnote row)) "✓" "✗")
+                     (if (seq (:code row)) "✓" "✗")
+                     (if (seq (:tests row)) "✓" "✗")))))
+
+(defn print-detailed-traceability [req-id reqs]
+  (let [req (first (filter #(= (:req-id %) req-id) reqs))]
+    (if req
+      (let [metadata (:metadata req)
+            trace (:trace metadata)]
+        (println (str "\n📋 Detailed Traceability for " (:req-id req)))
+        (println "=====================================")
+        (println (str "\nTitle: " (:title req)))
+        (println (str "Type: " (name (:type req))))
+        (println (str "Priority: " (name (:priority req))))
+        (println (str "Status: " (name (:status req))))
+
+        (println "\nTraceability Links:")
+        (if (seq (:adr trace))
+          (do (println "\n  ADRs:")
+              (doseq [adr (:adr trace)]
+                (println (str "    - " adr))))
+          (println "\n  ADRs: None"))
+
+        (if (seq (:runnote trace))
+          (do (println "\n  RunNotes:")
+              (doseq [rn (:runnote trace)]
+                (println (str "    - " rn))))
+          (println "\n  RunNotes: None"))
+
+        (if (seq (:code trace))
+          (do (println "\n  Code:")
+              (doseq [code (:code trace)]
+                (println (str "    - " code))))
+          (println "\n  Code: None"))
+
+        (if (seq (:tests trace))
+          (do (println "\n  Tests:")
+              (doseq [test (:tests trace)]
+                (println (str "    - " test))))
+          (println "\n  Tests: None"))
+
+        (let [coverage (traceability-coverage metadata)]
+          (println (str "\nTraceability Score: " (:score coverage) "%"))))
+      (println (str "Requirement not found: " req-id)))))
+
+;; ============================================================================
+;; Usage
+;; ============================================================================
+
+(defn print-usage []
+  (println "Usage: req-trace [command] [args]")
+  (println "")
+  (println "Commands:")
+  (println "  summary                    - Show traceability coverage summary")
+  (println "  matrix                     - Show traceability matrix for all requirements")
+  (println "  gaps <type>                - Show requirements missing traceability")
+  (println "                               Types: adr, code, tests, runnote")
+  (println "  detail <req-id>            - Show detailed traceability for a requirement")
+  (println "  help                       - Show this help"))
+
+;; ============================================================================
+;; Main
+;; ============================================================================
+
+(defn -main [& args]
+  (let [command (first args)
+        reqs (list-reqs)]
+    (case command
+      "summary" (let [analysis (analyze-traceability reqs)]
+                  (print-traceability-summary analysis))
+
+      "matrix" (let [matrix (generate-traceability-matrix reqs)]
+                 (print-traceability-matrix matrix))
+
+      "gaps" (if-let [gap-type-str (second args)]
+               (let [gap-type (keyword gap-type-str)]
+                 (if (contains? #{:adr :code :tests :runnote} gap-type)
+                   (print-gap-list gap-type reqs)
+                   (println "Invalid gap type. Use: adr, code, tests, or runnote")))
+               (do
+                 (println "Showing all traceability gaps:\n")
+                 (print-gap-list :adr reqs)
+                 (print-gap-list :code reqs)
+                 (print-gap-list :tests reqs)
+                 (print-gap-list :runnote reqs)))
+
+      "detail" (if-let [req-id (second args)]
+                 (print-detailed-traceability req-id reqs)
+                 (println "Please specify a requirement ID"))
+
+      "help" (print-usage)
+
+      (do
+        (when command
+          (println "Unknown command:" command))
+        (print-usage)))))
+
+;; ============================================================================
+;; CLI entry point
+;; ============================================================================
+
+(when (= *file* (System/getProperty "babashka.file"))
+  (apply -main *command-line-args*))
