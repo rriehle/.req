@@ -74,7 +74,13 @@
 ;; ============================================================================
 
 (defn search-by-tag [tag reqs]
-  (let [tag-kw (if (keyword? tag) tag (keyword tag))]
+  (let [; Strip leading : if present, then convert to keyword
+        tag-str (if (string? tag)
+                  (if (str/starts-with? tag ":")
+                    (subs tag 1)
+                    tag)
+                  (str tag))
+        tag-kw (keyword tag-str)]
     (filter #(contains? (:tags %) tag-kw) reqs)))
 
 (defn search-by-content [query reqs]
@@ -83,21 +89,41 @@
           reqs))
 
 (defn search-by-status [status reqs]
-  (filter #(when-let [s (:status %)]
-             (= (str/lower-case (name s))
-                (str/lower-case status)))
-          reqs))
+  (let [status-str (if (string? status)
+                     (if (str/starts-with? status ":")
+                       (subs status 1)
+                       status)
+                     (str status))]
+    (filter #(when-let [s (:status %)]
+               (= (str/lower-case (name s))
+                  (str/lower-case status-str)))
+            reqs)))
 
 (defn search-by-category [category reqs]
-  (let [cat-kw (if (keyword? category) category (keyword category))]
+  (let [cat-str (if (string? category)
+                  (if (str/starts-with? category ":")
+                    (subs category 1)
+                    category)
+                  (str category))
+        cat-kw (keyword cat-str)]
     (filter #(= (:category %) cat-kw) reqs)))
 
 (defn search-by-priority [priority reqs]
-  (let [pri-kw (if (keyword? priority) priority (keyword priority))]
+  (let [pri-str (if (string? priority)
+                  (if (str/starts-with? priority ":")
+                    (subs priority 1)
+                    priority)
+                  (str priority))
+        pri-kw (keyword pri-str)]
     (filter #(= (:priority %) pri-kw) reqs)))
 
 (defn search-by-type [type reqs]
-  (let [type-kw (if (keyword? type) type (keyword type))]
+  (let [type-str (if (string? type)
+                   (if (str/starts-with? type ":")
+                     (subs type 1)
+                     type)
+                   (str type))
+        type-kw (keyword type-str)]
     (filter #(= (:type %) type-kw) reqs)))
 
 (defn search-by-adr [adr-id reqs]
@@ -116,15 +142,22 @@
 ;; Display Functions
 ;; ============================================================================
 
+(defn safe-name [v]
+  "Safely convert value to name, handling keywords, strings, and other types"
+  (cond
+    (keyword? v) (name v)
+    (string? v) v
+    :else (str v)))
+
 (defn print-req [req]
   (println (str "\n" (:req-id req) " - " (:title req)))
   (println (str "  File: " (:file req)))
-  (println (str "  Type: " (name (:type req))))
-  (println (str "  Category: " (name (:category req))))
-  (println (str "  Priority: " (name (:priority req))))
-  (println (str "  Status: " (name (:status req))))
+  (println (str "  Type: " (safe-name (:type req))))
+  (println (str "  Category: " (safe-name (:category req))))
+  (println (str "  Priority: " (safe-name (:priority req))))
+  (println (str "  Status: " (safe-name (:status req))))
   (when (seq (:tags req))
-    (println (str "  Tags: " (str/join " " (map #(str ":" (name %)) (:tags req))))))
+    (println (str "  Tags: " (str/join " " (map #(str ":" (safe-name %)) (:tags req))))))
   (when-let [trace (:trace req)]
     (when (seq (:adr trace))
       (println (str "  ADRs: " (str/join ", " (:adr trace)))))
@@ -175,20 +208,25 @@
     (println (str "\nTotal Requirements: " total))
 
     (println "\nBy Type:")
-    (doseq [[type group] (sort-by key by-type)]
-      (println (format "  %-20s %d" (name type) (count group))))
+    (doseq [[type group] (sort by-type)]
+      (println (format "  %-20s %d" (safe-name type) (count group))))
 
     (println "\nBy Priority:")
-    (doseq [[pri group] (sort-by key by-priority)]
-      (println (format "  %-20s %d" (name pri) (count group))))
+    (doseq [[pri group] (sort by-priority)]
+      (println (format "  %-20s %d" (safe-name pri) (count group))))
 
     (println "\nBy Status:")
-    (doseq [[status group] (sort-by key by-status)]
-      (println (format "  %-20s %d" (name status) (count group))))
+    (doseq [[status group] (sort by-status)]
+      (println (format "  %-20s %d" (safe-name status) (count group))))
 
     (println "\nBy Category:")
-    (doseq [[cat group] (sort-by key by-category)]
-      (println (format "  %-20s %d" (name cat) (count group))))))
+    (if (seq by-category)
+      (do
+        ; Debug: print raw structure
+        ; (println "DEBUG by-category:" (pr-str by-category))
+        (doseq [[cat group] by-category]  ; Don't sort, just iterate
+          (println (format "  %-20s %d" (safe-name cat) (count group)))))
+      (println "  No categories found"))))
 
 ;; ============================================================================
 ;; Usage

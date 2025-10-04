@@ -111,15 +111,23 @@
 ;; ============================================================================
 
 (defn validate-sections [file content]
-  (let [required-sections ["## Requirement Statement"
-                           "## Context"
-                           "## Acceptance Criteria"]
-        missing-required (filter #(not (str/includes? content %)) required-sections)]
-    (if (empty? missing-required)
+  (let [; Accept both "## Requirement Statement" and "## Functional Requirement Statement" (or "## Non-Functional...")
+        has-req-statement? (or (str/includes? content "## Requirement Statement")
+                               (str/includes? content "## Functional Requirement Statement")
+                               (str/includes? content "## Non-Functional Requirement Statement"))
+        ; Accept both "## Context" and "## Business Context"
+        has-context? (or (str/includes? content "## Context")
+                         (str/includes? content "## Business Context"))
+        has-acceptance? (str/includes? content "## Acceptance Criteria")
+        missing (cond-> []
+                  (not has-req-statement?) (conj "## Requirement Statement (or ## Functional/Non-Functional Requirement Statement)")
+                  (not has-context?) (conj "## Context (or ## Business Context)")
+                  (not has-acceptance?) (conj "## Acceptance Criteria"))]
+    (if (empty? missing)
       (validation-result true file nil)
       (validation-result false file
                          (str "Missing required sections: "
-                              (str/join ", " missing-required))))))
+                              (str/join ", " missing))))))
 
 ;; ============================================================================
 ;; Validate traceability links exist (if configured)
