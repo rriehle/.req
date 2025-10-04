@@ -218,6 +218,74 @@ Test Traceability:
   Missing test links:  10
 ```
 
+### Fix Metadata Issues
+
+Automatically fix common metadata problems across all requirements:
+
+```bash
+# Fix all requirements
+req-fix-metadata
+
+# Preview changes without applying (dry-run)
+req-fix-metadata --dry-run
+
+# Show help
+req-fix-metadata --help
+```
+
+**Issues Fixed Automatically:**
+
+1. **Missing :metadata marker** - Adds `:metadata` to EDN blocks
+   ```edn
+   # Before
+   ```edn
+   {:req-id "REQ-AUTH-001" ...}
+   ```
+
+   # After
+   ```edn :metadata
+   {:req-id "REQ-AUTH-001" ...}
+   ```
+   ```
+
+2. **Trace strings instead of sets** - Converts trace fields to proper set format
+   ```edn
+   # Before
+   :trace {:adr "ADR-001" :code "auth.py"}
+
+   # After
+   :trace {:adr #{"ADR-001"} :code #{"auth.py"}}
+   ```
+
+3. **Missing Context section** - Adds placeholder Context section
+   ```markdown
+   # Before: Missing ## Context section
+
+   # After: Adds
+   ## Context
+
+   [Context to be added]
+   ```
+
+**Example Output:**
+```
+🔧 Requirement File Fix Report
+==============================
+
+✅ Fixed 27 file(s):
+
+  REQ-AUTH-001-mfa.md
+    • Added :metadata marker
+    • Converted trace strings to sets
+
+  REQ-DATA-003-encryption.md
+    • Added Context section
+
+✓ 53 file(s) already valid
+
+📊 Summary: 80 files checked, 27 files fixed
+```
+
 ## Requirements Format
 
 Requirements use markdown with embedded EDN metadata:
@@ -259,8 +327,11 @@ We need stronger authentication to meet compliance requirements...
 
 **Required:**
 - `:req-id` - Unique requirement ID (format: REQ-[CATEGORY]-[NUMBER])
-- `:type` - `:functional`, `:non-functional`, or `:constraint`
-- `:category` - Project-specific category keyword
+  - Supports hyphenated categories: `REQ-SECURITY-CRYPTO-001`, `REQ-INTEGRATION-VERSION-CONTROL-001`
+- `:type` - `:functional`, `:non-functional`, `:constraint`, or `:integration`
+- `:category` - Project-specific category (keyword or vector for multi-dimensional)
+  - Single: `:authentication`
+  - Multi-dimensional: `[:pppost :integration :events]`
 - `:priority` - `:must`, `:shall`, `:should`, or `:may` (RFC 2119)
 - `:status` - `:proposed`, `:accepted`, `:deprecated`, `:deferred`, or `:implemented`
 - `:tag` - Set of keyword tags
@@ -288,9 +359,13 @@ Examples:
 REQ-AUTH-001-multi-factor-authentication.md
 REQ-PERF-042-response-time-sla.md
 REQ-UI-015-accessibility-compliance.md
+
+Hyphenated categories (multi-word):
+REQ-SECURITY-CRYPTO-001-cryptographic-agility.md
+REQ-INTEGRATION-VERSION-CONTROL-001-policy-versioning.md
 ```
 
-- **CATEGORY**: Uppercase abbreviation (e.g., AUTH, PERF, UI)
+- **CATEGORY**: Uppercase abbreviation, may include hyphens for multi-word categories
 - **NUMBER**: 3-5 digit sequence (e.g., 001, 042, 00123)
 - **title**: Lowercase with hyphens
 
@@ -299,21 +374,26 @@ REQ-UI-015-accessibility-compliance.md
 ```
 ~/.req/                          # Installation directory
 ├── bin/                        # Executable scripts
-│   ├── req-validate
-│   ├── req-search
-│   └── req-trace
+│   ├── req-validate            # Validate requirements format
+│   ├── req-search              # Search and filter requirements
+│   ├── req-trace               # Traceability analysis
+│   └── req-fix-metadata        # Automated metadata fixer
+├── req-core.bb                 # Requirements utilities (domain-specific)
+├── req-metadata-extractor.bb   # Metadata extraction and validation
 ├── template/                   # Requirement templates
 │   ├── default.md
 │   ├── functional.md
 │   └── non-functional.md
+├── test/                       # Test suite
+│   ├── validator-error-reporting-test.bb  # Validator tests (10 tests)
+│   └── duplicate-function-test.bb         # DRY refactoring tests
 ├── config.edn                  # Global configuration
 └── README.md                   # This file
 
-~/.lib/                          # Shared libraries
-├── config-core.bb              # Shared config loading
+Dependencies from ~/.lib:
+├── config-core.bb              # Shared config management
 ├── metadata-parser.bb          # EDN metadata parsing
-├── req-core.bb                 # Requirements core utilities
-└── req-metadata-extractor.bb   # Requirements metadata extraction
+└── test/test-framework.bb      # Test utilities
 ```
 
 ## Common Workflows

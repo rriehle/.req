@@ -8,13 +8,14 @@
   (:require [babashka.fs :as fs]
             [clojure.string :as str]))
 
-;; Load shared libraries from ~/.lib/
-(load-file (str (fs/expand-home "~/.lib/req-core.bb")))
+;; Load shared libraries
+(load-file (str (fs/expand-home "~/.req/req-core.bb")))
 (def load-config (:load-config req-core/exports))
 (def resolve-req-path (:resolve-req-path req-core/exports))
 (def req-config (:req-config req-core/exports))
+(def find-req-files (:find-req-files req-core/exports))
 
-(load-file (str (fs/expand-home "~/.lib/req-metadata-extractor.bb")))
+(load-file (str (fs/expand-home "~/.req/req-metadata-extractor.bb")))
 (def parse-req-metadata (:parse-req-metadata req-metadata-extractor/exports))
 
 ;; ============================================================================
@@ -41,17 +42,6 @@
   {:valid valid?
    :file file
    :error error})
-
-;; ============================================================================
-;; File discovery
-;; ============================================================================
-
-(defn find-req-files [config]
-  (let [req-dir (:req-dir config)]
-    (when (fs/exists? req-dir)
-      (let [files (fs/glob req-dir "*.md")]
-        (filter #(and (not= (fs/file-name %) (:template-file config))
-                      (not ((:excluded-files config) (fs/file-name %)))) files)))))
 
 ;; ============================================================================
 ;; Extract requirement ID from filename
@@ -88,6 +78,7 @@
       (validation-result false file
                          (str "Invalid metadata: "
                               (or (-> result :errors first :message)
+                                  (-> result :errors first :explanation)
                                   "metadata validation failed"))))))
 
 ;; ============================================================================
@@ -111,10 +102,11 @@
 ;; ============================================================================
 
 (defn validate-sections [file content]
-  (let [; Accept both "## Requirement Statement" and "## Functional Requirement Statement" (or "## Non-Functional...")
+  (let [; Accept all requirement statement variants
         has-req-statement? (or (str/includes? content "## Requirement Statement")
                                (str/includes? content "## Functional Requirement Statement")
-                               (str/includes? content "## Non-Functional Requirement Statement"))
+                               (str/includes? content "## Non-Functional Requirement Statement")
+                               (str/includes? content "## Integration Requirement Statement"))
         ; Accept both "## Context" and "## Business Context"
         has-context? (or (str/includes? content "## Context")
                          (str/includes? content "## Business Context"))
@@ -364,6 +356,18 @@
             _ (display-results analysis ci-mode?)
             exit-code (if (zero? (:total-errors analysis)) 0 1)]
         (System/exit exit-code)))))
+
+;; ============================================================================
+;; Export for use by other scripts (e.g., tests)
+;; ============================================================================
+
+(def exports
+  {:validate-metadata validate-metadata
+   :validate-sections validate-sections
+   :validate-metadata-filename-match validate-metadata-filename-match
+   :validate-traceability validate-traceability
+   :validate-req-file validate-req-file
+   :validate-req-ids validate-req-ids})
 
 ;; ============================================================================
 ;; CLI entry point

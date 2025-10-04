@@ -1,0 +1,226 @@
+#!/usr/bin/env bb
+
+(ns ^:clj-kondo/ignore req-fix-metadata
+  "Automated fixer for common requirement metadata issues.
+
+   Fixes:
+   1. Missing :metadata marker in EDN blocks
+   2. String values in :trace (should be sets)
+   3. Missing Context sections"
+  (:require [babashka.fs :as fs]
+            [clojure.string :as str]
+            [clojure.edn :as edn]))
+
+;; Load shared libraries
+(load-file (str (fs/expand-home "~/.req/req-core.bb")))
+(def load-config (:load-config req-core/exports))
+(def resolve-req-path (:resolve-req-path req-core/exports))
+
+;; ============================================================================
+;; Configuration
+;; ============================================================================
+
+(defn get-req-dir []
+  (let [config-result (load-config)]
+    (resolve-req-path config-result)))
+
+;; ============================================================================
+;; Fix 1: Add :metadata marker to EDN blocks
+;; ============================================================================
+
+(defn fix-missing-metadata-marker
+  "Add :metadata marker to EDN blocks that are missing it"
+  [content]
+  (str/replace content
+               #"```edn\n(\{:req-id)"
+               "```edn :metadata\n$1"))
+
+;; ============================================================================
+;; Fix 2: Convert trace strings to sets
+;; ============================================================================
+
+(defn fix-trace-strings-in-line
+  "Convert trace string values to sets in a single line"
+  [line]
+  (-> line
+      ;; Fix :architecture "string" -> :architecture #{"string"}
+      (str/replace #":architecture\s+\"([^\"]+)\""
+                   ":architecture #{\"$1\"}")
+      ;; Fix :adr "string" -> :adr #{"string"}
+      (str/replace #":adr\s+\"([^\"]+)\""
+                   ":adr #{\"$1\"}")
+      ;; Fix :runnote "string" -> :runnote #{"string"}
+      (str/replace #":runnote\s+\"([^\"]+)\""
+                   ":runnote #{\"$1\"}")
+      ;; Fix :code "string" -> :code #{"string"}
+      (str/replace #":code\s+\"([^\"]+)\""
+                   ":code #{\"$1\"}")
+      ;; Fix :tests "string" -> :tests #{"string"}
+      (str/replace #":tests\s+\"([^\"]+)\""
+                   ":tests #{\"$1\"}")))
+
+(defn fix-trace-strings
+  "Convert all trace string values to sets throughout the content"
+  [content]
+  (let [lines (str/split-lines content)]
+    (str/join "\n" (map fix-trace-strings-in-line lines))))
+
+;; ============================================================================
+;; Fix 3: Add missing Context section
+;; ============================================================================
+
+(defn has-context-section?
+  "Check if content has a Context or Business Context section"
+  [content]
+  (or (str/includes? content "## Context")
+      (str/includes? content "## Business Context")))
+
+(defn find-insertion-point
+  "Find where to insert Context section (after Requirement Statement)"
+  [lines]
+  (let [req-statement-idx (first (keep-indexed
+                                  #(when (or (str/includes? %2 "## Requirement Statement")
+                                            (str/includes? %2 "## Functional Requirement")
+                                            (str/includes? %2 "## Non-Functional Requirement"))
+                                     %1)
+                                  lines))]
+    (when req-statement-idx
+      ;; Find end of that section (next ## or end of file)
+      (or (first (keep-indexed
+                  #(when (and (> %1 req-statement-idx)
+                             (str/starts-with? %2 "## "))
+                     %1)
+                  lines))
+          (count lines)))))
+
+(defn add-context-section
+  "Add a Context section if missing"
+  [content]
+  (if (has-context-section? content)
+    content
+    (let [lines (str/split-lines content)
+          insertion-idx (find-insertion-point lines)]
+      (if insertion-idx
+        (let [before (take insertion-idx lines)
+              after (drop insertion-idx lines)
+              context-section ["" "## Context" "" "[Context to be added]" ""]]
+          (str/join "\n" (concat before context-section after)))
+        content))))
+
+;; ============================================================================
+;; Main Fix Function
+;; ============================================================================
+
+(defn fix-requirement-file
+  "Apply all fixes to a requirement file"
+  [file-path]
+  (let [file-path-str (str file-path)
+        content (slurp file-path-str)
+        fixed-content (-> content
+                          fix-missing-metadata-marker
+                          fix-trace-strings
+                          add-context-section)]
+    (if (= content fixed-content)
+      {:file (fs/file-name file-path)
+       :changed false
+       :fixes []}
+      (let [fixes (cond-> []
+                    (not= content (fix-missing-metadata-marker content))
+                    (conj "Added :metadata marker")
+
+                    (not= content (fix-trace-strings content))
+                    (conj "Converted trace strings to sets")
+
+                    (not= content (add-context-section content))
+                    (conj "Added Context section"))]
+        (spit file-path-str fixed-content)
+        {:file (fs/file-name file-path)
+         :changed true
+         :fixes fixes}))))
+
+;; ============================================================================
+;; File Discovery
+;; ============================================================================
+
+(defn find-req-files []
+  (let [req-dir (get-req-dir)]
+    (when (fs/exists? req-dir)
+      (->> (fs/glob req-dir "REQ-*.md")
+           (filter #(not (str/includes? (str %) "template")))))))
+
+;; ============================================================================
+;; Reporting
+;; ============================================================================
+
+(defn print-results [results]
+  (let [changed (filter :changed results)
+        unchanged (filter (complement :changed) results)]
+    (println "\n🔧 Requirement File Fix Report")
+    (println "==============================\n")
+
+    (when (seq changed)
+      (println (str "✅ Fixed " (count changed) " file(s):\n"))
+      (doseq [{:keys [file fixes]} changed]
+        (println (str "  " file))
+        (doseq [fix fixes]
+          (println (str "    • " fix)))))
+
+    (when (seq unchanged)
+      (println (str "\n✓ " (count unchanged) " file(s) already valid")))
+
+    (println (str "\n📊 Summary: "
+                  (count results) " files checked, "
+                  (count changed) " files fixed"))))
+
+;; ============================================================================
+;; Usage
+;; ============================================================================
+
+(defn print-usage []
+  (println "Usage: req-fix-metadata [options]")
+  (println "")
+  (println "Options:")
+  (println "  --dry-run    Show what would be fixed without making changes")
+  (println "  --help       Show this help message")
+  (println "")
+  (println "Fixes:")
+  (println "  1. Adds :metadata marker to EDN blocks")
+  (println "  2. Converts trace string values to sets")
+  (println "  3. Adds missing Context sections")
+  (println "")
+  (println "Examples:")
+  (println "  req-fix-metadata              # Fix all requirements")
+  (println "  req-fix-metadata --dry-run    # Preview changes without applying"))
+
+;; ============================================================================
+;; Main
+;; ============================================================================
+
+(defn -main [& args]
+  (cond
+    (some #{"--help" "-h"} args)
+    (print-usage)
+
+    (some #{"--dry-run"} args)
+    (do
+      (println "🔍 DRY RUN - No files will be modified\n")
+      (let [files (find-req-files)
+            results (map #(assoc (fix-requirement-file %) :dry-run true) files)]
+        (print-results results)
+        (println "\nℹ️  No changes were made (dry run mode)")))
+
+    :else
+    (let [files (find-req-files)]
+      (if (empty? files)
+        (println "No requirement files found")
+        (do
+          (println (str "Found " (count files) " requirement file(s)\n"))
+          (let [results (map fix-requirement-file files)]
+            (print-results results)))))))
+
+;; ============================================================================
+;; CLI Entry Point
+;; ============================================================================
+
+(when (= *file* (System/getProperty "babashka.file"))
+  (apply -main *command-line-args*))
