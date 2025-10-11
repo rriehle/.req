@@ -159,7 +159,7 @@
       (->> (.listFiles dir)
            (filter #(and (.isFile %)
                          (str/ends-with? (.getName %) ".md")
-                         (re-matches #"REQ-[A-Z]+-\d{3,5}.*\.md" (.getName %))))
+                         (re-matches #"REQ-(?:[A-Z]+-)+\d{3,5}.*\.md" (.getName %))))
            (map read-req-metadata)
            (filter some?)
            (sort-by :req-id)))))
