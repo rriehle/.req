@@ -16,7 +16,7 @@ A general-purpose toolkit for managing software requirements across multiple pro
 
 1. Clone this repository to `~/.req`:
    ```bash
-   git clone repo-url> ~/.req
+   git clone <repo-url> ~/.req
    ```
 
 2. Add `~/.req/bin` to your PATH:
