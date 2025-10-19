@@ -601,6 +601,16 @@ bb -e "(clojure.edn/read-string (slurp \".req.edn\"))"
 - **Meaningful tags**: Use tags for cross-cutting concerns
 - **ISO 25010 for NFRs**: Use standard taxonomy for non-functional requirements
 
+## Documentation
+
+For AI agents and advanced users:
+
+- **[CLAUDE.md](CLAUDE.md)** - Quick reference guide for AI agents
+- **[doc/README-WORKFLOWS.md](doc/README-WORKFLOWS.md)** - Detailed elicitation, inference, and validation workflows
+- **[doc/README-FILE-FORMAT.md](doc/README-FILE-FORMAT.md)** - Complete format specifications, metadata fields, EDN syntax
+- **[doc/README-INTEGRATION.md](doc/README-INTEGRATION.md)** - Integration patterns with ADR, RunNotes, code, tests
+- **[doc/README-QUALITY.md](doc/README-QUALITY.md)** - Quality enforcement guidelines, RFC 2119, testability, common pitfalls
+
 ## See Also
 
 - [ADR Tools](https://github.com/rriehle/.adr)
