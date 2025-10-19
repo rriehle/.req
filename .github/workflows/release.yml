@@ -1,0 +1,73 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+      - name: Create release tarball
+        run: |
+          VERSION=${{ steps.version.outputs.VERSION }}
+          DIST_DIR="req-tools-${VERSION}"
+
+          mkdir -p "${DIST_DIR}"
+
+          # Copy distribution files
+          cp -r bin "${DIST_DIR}/"
+          cp -r template "${DIST_DIR}/"
+          cp -r doc "${DIST_DIR}/"
+          cp req-core.bb req-metadata-extractor.bb "${DIST_DIR}/"
+          cp config.edn LICENSE README.md CLAUDE.md "${DIST_DIR}/"
+
+          # Create tarball
+          tar czf "req-tools-${VERSION}.tar.gz" "${DIST_DIR}/"
+
+          # Create checksums
+          sha256sum "req-tools-${VERSION}.tar.gz" > "req-tools-${VERSION}.tar.gz.sha256"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            req-tools-*.tar.gz
+            req-tools-*.tar.gz.sha256
+            install.sh
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            ### Quick Install
+            ```bash
+            curl -sL https://github.com/rriehle/.req/releases/download/${{ steps.version.outputs.VERSION }}/install.sh | bash
+            echo 'export PATH="$HOME/.req/bin:$PATH"' >> ~/.bashrc  # or ~/.zshrc
+            source ~/.bashrc  # or source ~/.zshrc
+            ```
+
+            ### Manual Install
+            ```bash
+            curl -sL https://github.com/rriehle/.req/releases/download/${{ steps.version.outputs.VERSION }}/req-tools-${{ steps.version.outputs.VERSION }}.tar.gz | tar xz
+            mv req-tools-${{ steps.version.outputs.VERSION }} ~/.req
+            echo 'export PATH="$HOME/.req/bin:$PATH"' >> ~/.bashrc  # or ~/.zshrc
+            source ~/.bashrc  # or source ~/.zshrc
+            ```
+
+            ### GitHub Actions Usage
+            See README.md for CI/CD integration examples.
+
+            ### Verify Installation
+            ```bash
+            req-validate --help
+            ```

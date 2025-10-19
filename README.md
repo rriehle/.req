@@ -14,26 +14,51 @@ A general-purpose toolkit for managing software requirements across multiple pro
 
 ## Installation
 
-1. Clone this repository to `~/.req`:
-   ```bash
-   git clone <repo-url> ~/.req
-   ```
+### Quick Install (Recommended)
 
-2. Add `~/.req/bin` to your PATH:
-   ```bash
-   # For bash
-   echo 'export PATH="$HOME/.req/bin:$PATH"' >> ~/.bashrc
-   source ~/.bashrc
+Using the installation script from the latest release:
 
-   # For zsh
-   echo 'export PATH="$HOME/.req/bin:$PATH"' >> ~/.zshrc
-   source ~/.zshrc
-   ```
+```bash
+curl -sL https://github.com/rriehle/.req/releases/latest/download/install.sh | bash
+```
 
-3. Verify installation:
-   ```bash
-   req-validate --help
-   ```
+Then add to your PATH:
+```bash
+# For bash
+echo 'export PATH="$HOME/.req/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
+
+# For zsh
+echo 'export PATH="$HOME/.req/bin:$PATH"' >> ~/.zshrc
+source ~/.zshrc
+```
+
+Verify installation:
+```bash
+req-validate --help
+```
+
+### Manual Install from Release
+
+Download and extract a specific version:
+
+```bash
+VERSION=v1.0.0  # Replace with desired version
+curl -sL https://github.com/rriehle/.req/releases/download/${VERSION}/req-tools-${VERSION}.tar.gz | tar xz
+mv req-tools-${VERSION} ~/.req
+```
+
+Then add to PATH as shown above.
+
+### Development Install
+
+Clone the repository for development:
+
+```bash
+git clone https://github.com/rriehle/.req.git ~/.req
+```
+
+Then add to PATH as shown above.
 
 ## Configuration
 
@@ -445,18 +470,185 @@ req-validate --check-new
 
 #### GitHub Actions
 
+**Full workflow example** - validate requirements on pull requests:
+
 ```yaml
-- name: Validate Requirements
+# .github/workflows/validate-requirements.yml
+name: Validate Requirements
+
+on:
+  pull_request:
+    paths:
+      - 'doc/req/**'
+      - '.req.edn'
+  push:
+    branches:
+      - main
+    paths:
+      - 'doc/req/**'
+      - '.req.edn'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # Needed for PR validation
+
+      - name: Install Babashka
+        run: |
+          curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
+
+      - name: Install req-tools
+        run: |
+          VERSION=v1.0.0  # Pin to specific version for reproducibility
+          curl -sL https://github.com/rriehle/.req/releases/download/${VERSION}/req-tools-${VERSION}.tar.gz | tar xz
+          mv req-tools-${VERSION} ~/.req
+          echo "$HOME/.req/bin" >> $GITHUB_PATH
+
+      - name: Validate requirements (PR)
+        if: github.event_name == 'pull_request'
+        run: req-validate --check-pr origin/${{ github.base_ref }}
+
+      - name: Validate requirements (Push)
+        if: github.event_name == 'push'
+        run: req-validate --ci
+
+      - name: Check traceability coverage
+        run: req-trace summary
+```
+
+**Minimal example** - validate on any change:
+
+```yaml
+- name: Install Babashka
+  run: curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
+
+- name: Install req-tools
   run: |
-    req-validate --check-pr origin/${{ github.base_ref }}
+    curl -sL https://github.com/rriehle/.req/releases/latest/download/install.sh | bash
+    echo "$HOME/.req/bin" >> $GITHUB_PATH
+
+- name: Validate Requirements
+  run: req-validate --ci
+```
+
+**Reusable workflow** - create a reusable workflow in your organization:
+
+```yaml
+# .github/workflows/req-validate-reusable.yml
+name: Validate Requirements (Reusable)
+
+on:
+  workflow_call:
+    inputs:
+      req-tools-version:
+        description: 'Version of req-tools to use'
+        required: false
+        default: 'latest'
+        type: string
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Babashka
+        run: curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | sudo bash
+
+      - name: Install req-tools
+        run: |
+          VERSION=${{ inputs.req-tools-version }}
+          if [ "$VERSION" = "latest" ]; then
+            URL="https://github.com/rriehle/.req/releases/latest/download/install.sh"
+          else
+            URL="https://github.com/rriehle/.req/releases/download/${VERSION}/install.sh"
+          fi
+          curl -sL "$URL" | bash
+          echo "$HOME/.req/bin" >> $GITHUB_PATH
+
+      - name: Validate
+        run: req-validate --ci
+
+      - name: Traceability Report
+        run: req-trace summary
+```
+
+Then use it in your projects:
+
+```yaml
+# .github/workflows/pr-checks.yml
+name: PR Checks
+
+on: [pull_request]
+
+jobs:
+  requirements:
+    uses: ./.github/workflows/req-validate-reusable.yml
+    with:
+      req-tools-version: v1.0.0
 ```
 
 #### GitLab CI
 
 ```yaml
-validate-reqs:
+# .gitlab-ci.yml
+validate-requirements:
+  stage: test
+  image: ubuntu:latest
+  before_script:
+    # Install Babashka
+    - apt-get update && apt-get install -y curl
+    - curl -sL https://raw.githubusercontent.com/babashka/babashka/master/install | bash
+    - export PATH="/usr/local/bin:$PATH"
+
+    # Install req-tools
+    - curl -sL https://github.com/rriehle/.req/releases/latest/download/install.sh | bash
+    - export PATH="$HOME/.req/bin:$PATH"
+
   script:
     - req-validate --ci
+    - req-trace summary
+
+  only:
+    changes:
+      - doc/req/**
+      - .req.edn
+```
+
+#### Docker/Container Approach
+
+For reproducible builds, create a Docker image with req-tools pre-installed:
+
+```dockerfile
+# Dockerfile.req-tools
+FROM babashka/babashka:latest
+
+ARG REQ_TOOLS_VERSION=latest
+
+RUN apt-get update && apt-get install -y curl tar && \
+    curl -sL "https://github.com/rriehle/.req/releases/${REQ_TOOLS_VERSION}/download/install.sh" | bash && \
+    rm -rf /var/lib/apt/lists/*
+
+ENV PATH="/root/.req/bin:${PATH}"
+
+WORKDIR /workspace
+
+ENTRYPOINT ["req-validate"]
+CMD ["--help"]
+```
+
+Then use in CI:
+
+```yaml
+- name: Validate Requirements
+  uses: docker://your-registry/req-tools:v1.0.0
+  with:
+    args: --ci
 ```
 
 ## Integration with ADR and RunNotes

@@ -9,6 +9,15 @@ For detailed documentation:
 - **Quality:** [doc/README-QUALITY.md](doc/README-QUALITY.md) - Quality enforcement and pitfalls
 - **Human Guide:** [README.md](README.md) - Installation, configuration, usage
 
+## Distribution
+
+**Distributed via GitHub Releases** - Install from releases for production use:
+```bash
+curl -sL https://github.com/rriehle/.req/releases/latest/download/install.sh | bash
+```
+
+See [README.md - Installation](README.md#installation) for development install and CI/CD integration.
+
 ---
 
 ## Core Principles
