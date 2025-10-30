@@ -809,7 +809,6 @@ For AI agents and advanced users:
 - [RunNotes](https://github.com:rriehle/.runnote)
 - [ISO/IEC 25010 Software Quality Model](https://iso25000.com/index.php/en/iso-25000-standards/iso-25010)
 - [RFC 2119: Key words for use in RFCs](https://www.rfc-editor.org/rfc/rfc2119)
-- [ADR-00035: Folder and Script Naming Conventions](~/src/xional/docs/architecture/decisions/00035-folder-and-script-naming-conventions.md)
 
 ## License
 
