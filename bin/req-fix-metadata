@@ -15,14 +15,20 @@
 (load-file (str (fs/expand-home "~/.req/req-core.bb")))
 (def load-config (:load-config req-core/exports))
 (def resolve-req-path (:resolve-req-path req-core/exports))
+(def get-config-value (:get-config-value req-core/exports))
 
 ;; ============================================================================
 ;; Configuration
 ;; ============================================================================
 
+(defn get-config-result []
+  (load-config))
+
 (defn get-req-dir []
-  (let [config-result (load-config)]
-    (resolve-req-path config-result)))
+  (resolve-req-path (get-config-result)))
+
+(defn recursive? []
+  (get-config-value (get-config-result) [:req :recursive]))
 
 ;; ============================================================================
 ;; Fix 1: Add :metadata marker to EDN blocks
@@ -143,9 +149,11 @@
 ;; ============================================================================
 
 (defn find-req-files []
-  (let [req-dir (get-req-dir)]
+  (let [req-dir (get-req-dir)
+        recursive? (recursive?)
+        pattern (if recursive? "**/REQ-*.md" "REQ-*.md")]
     (when (fs/exists? req-dir)
-      (->> (fs/glob req-dir "REQ-*.md")
+      (->> (fs/glob req-dir pattern)
            (filter #(not (str/includes? (str %) "template")))))))
 
 ;; ============================================================================

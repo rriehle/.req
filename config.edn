@@ -1,5 +1,6 @@
 {:req
  {:path "doc/req"                           ; Default requirements location
+  :recursive false                          ; Enable subfolder recursion (use **/*)
   :template-dir "~/.req/template"           ; Template location
   :template-file "REQ-00000-template.md"    ; Template filename
   :excluded-files #{"README.md"}            ; Files to skip in validation

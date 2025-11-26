@@ -85,14 +85,16 @@
    - Excluded files (from config)
 
    Args:
-     config: Configuration map with :req-dir, :template-file, :excluded-files
+     config: Configuration map with :req-dir, :template-file, :excluded-files, :recursive
 
    Returns:
      Sequence of file paths, or nil if directory doesn't exist"
   [config]
-  (let [req-dir (:req-dir config)]
+  (let [req-dir (:req-dir config)
+        recursive? (:recursive config false)
+        pattern (if recursive? "**/*.md" "*.md")]
     (when (fs/exists? req-dir)
-      (let [files (fs/glob req-dir "*.md")]
+      (let [files (fs/glob req-dir pattern)]
         (filter #(and (not= (fs/file-name %) (:template-file config))
                       (not ((:excluded-files config) (fs/file-name %)))) files)))))
 
@@ -149,20 +151,22 @@
 
    Args:
      req-dir: Directory path containing requirement files
+     recursive?: If true, search subdirectories (default false)
 
    Returns:
      Sorted sequence of requirement metadata maps (sorted by :req-id),
      or nil if directory doesn't exist"
-  [req-dir]
-  (let [dir (io/file req-dir)]
-    (when (.exists dir)
-      (->> (.listFiles dir)
-           (filter #(and (.isFile %)
-                         (str/ends-with? (.getName %) ".md")
-                         (re-matches #"REQ-(?:[A-Z]+-)+\d{3,5}.*\.md" (.getName %))))
-           (map read-req-metadata)
-           (filter some?)
-           (sort-by :req-id)))))
+  ([req-dir]
+   (list-reqs req-dir false))
+  ([req-dir recursive?]
+   (when (fs/exists? req-dir)
+     (let [pattern (if recursive? "**/*.md" "*.md")
+           files (fs/glob req-dir pattern)]
+       (->> files
+            (filter #(re-matches #"REQ-(?:[A-Z]+-)+\d{3,5}.*\.md" (fs/file-name %)))
+            (map #(read-req-metadata (io/file (str %))))
+            (filter some?)
+            (sort-by :req-id))))))
 
 ;; ============================================================================
 ;; Export for use by other scripts
