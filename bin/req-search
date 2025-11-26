@@ -10,17 +10,30 @@
 (def load-config (:load-config req-core/exports))
 (def resolve-req-path (:resolve-req-path req-core/exports))
 (def read-req-metadata (:read-req-metadata req-core/exports))
-(def list-reqs (:list-reqs req-core/exports))
+(def list-reqs-fn (:list-reqs req-core/exports))
+(def req-config (:req-config req-core/exports))
 
 ;; ============================================================================
 ;; Configuration
 ;; ============================================================================
 
+(defn get-config-result []
+  (load-config))
+
 (defn get-req-dir
   "Get requirements directory from config"
   []
-  (let [config-result (load-config)]
-    (resolve-req-path config-result)))
+  (resolve-req-path (get-config-result)))
+
+(defn recursive? []
+  (get (req-config (get-config-result)) :recursive false))
+
+(defn list-reqs
+  "List requirements with recursive support"
+  ([]
+   (list-reqs (get-req-dir)))
+  ([req-dir]
+   (list-reqs-fn req-dir (recursive?))))
 
 
 ;; ============================================================================

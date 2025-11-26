@@ -24,7 +24,7 @@
 
 (defn get-req-config
   "Load requirements configuration with defaults.
-   Returns map with :req-dir, :template-file, :excluded-files"
+   Returns map with :req-dir, :template-file, :excluded-files, :recursive"
   []
   (let [config-result (load-config)
         cfg (req-config config-result)
@@ -32,6 +32,7 @@
     {:req-dir req-dir
      :template-file (or (:template-file cfg) "REQ-00000-template.md")
      :excluded-files (or (:excluded-files cfg) #{"README.md"})
+     :recursive (get cfg :recursive false)
      :config-result config-result}))
 
 ;; ============================================================================
