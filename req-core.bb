@@ -92,7 +92,8 @@
   [config]
   (let [req-dir (:req-dir config)
         recursive? (:recursive config false)
-        pattern (if recursive? "**/*.md" "*.md")]
+        ;; {,**/} matches both top-level (empty) and any subdirectory depth
+        pattern (if recursive? "{,**/}*.md" "*.md")]
     (when (fs/exists? req-dir)
       (let [files (fs/glob req-dir pattern)]
         (filter #(and (not= (fs/file-name %) (:template-file config))
@@ -160,7 +161,8 @@
    (list-reqs req-dir false))
   ([req-dir recursive?]
    (when (fs/exists? req-dir)
-     (let [pattern (if recursive? "**/*.md" "*.md")
+     ;; {,**/} matches both top-level (empty) and any subdirectory depth
+     (let [pattern (if recursive? "{,**/}*.md" "*.md")
            files (fs/glob req-dir pattern)]
        (->> files
             (filter #(re-matches #"REQ-(?:[A-Z]+-)+\d{3,5}.*\.md" (fs/file-name %)))
